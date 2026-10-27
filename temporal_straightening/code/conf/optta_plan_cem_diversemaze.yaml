@@ -1,0 +1,78 @@
+defaults:
+  - _self_
+  - override hydra/launcher: submitit_slurm
+
+hydra:
+  run:
+    dir: eval_outputs/${replace_slash:${model_name}}/cem_opttalr${planner.adapt.lr}_steps${planner.adapt.steps}_seed${seed}
+  sweep:
+    dir: eval_outputs/${replace_slash:${model_name}}/cem_opttalr${planner.adapt.lr}_steps${planner.adapt.steps}_seed${seed}
+    subdir: ${hydra.job.num}
+  launcher:
+    submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+    nodes: 1
+    tasks_per_node: 1
+    cpus_per_task: 16
+    mem_gb: 64
+    gres: "gpu:1"
+    qos: "normal"
+    timeout_min: 720
+
+ckpt_base_path: ./checkpoints # released model dir (contains hydra.yaml + checkpoints/)
+model_name: null
+model_epoch: latest
+
+seed: 100
+n_evals: 50
+goal_source: 'maze_dist'      # BFS distance-controlled goals on held-out val mazes
+eval_data_path: null          # diverse_maze dataset directory (train/ + val/)
+min_block_radius: 3           # easy: 3-5 | medium: 6-9 | hard: 10-14
+max_block_radius: 5
+goal_H: 25
+n_plot_samples: 10
+decode_for_viz: false
+num_start_frames: 1
+
+debug_dset_init: False
+
+objective:
+  _target_: planning.objectives.create_objective_fn
+  alpha: 1
+  base: 2
+  mode: all
+
+planner:
+  _target_: planning.optta_mpc.OpTTAMPCPlanner
+  max_iter: 30                     # replans per episode
+  n_taken_actions: 5
+
+  # --- Test-time adaptation (frozen baseline: adapt.lr=0 adapt.steps=0) ---
+  adapt:
+    lr: 5e-4
+    steps: 1
+    optimizer: adam
+    finetune_every: 1              # adapt every N MPC iterations
+    replay_buffer: recent5         # false | 'recent<N>' | 'hard<N>'
+    finetune_encoder: true         # adapt the encoder head too
+    encoder_lr: 1e-5               # separate encoder LR (defaults to lr if null)
+    last_layer_only: true          # predictor's last transformer layer only
+    encoder_last_layer_only: true  # encoder's last submodule only
+    # OpTTA optimism (planning/optta.py). rho = optimism_ratio_target: 0 = AdaJEPA, 1 = OpTTA.
+    optimism_ratio_target: 0.0
+    optimism_rho_schedule: increasing  # rho_eff = rho * sqrt(min(1, k/K))
+    optimism_rho_schedule_steps: null  # K; null = planner.max_iter (the ramp spans the episode)
+    # >0: score the optimism term on up to this many final-iteration CEM plans
+    # (top-k, or all with sub_planner.optimism_all_samples=true); 0 = elite mean.
+    optimism_elites: 200
+  reuse_actions: true              # warm-start from unexecuted actions of previous replan
+
+  sub_planner:
+    target: planning.cem.CEMPlanner
+    horizon: 25
+    topk: 30
+    num_samples: 200
+    var_scale: 1
+    opt_steps: 10
+    eval_every: -1
+    optimism_all_samples: true     # optimism pool = all num_samples plans (inert when rho = 0)
+  name: optta_plan_cem_diversemaze

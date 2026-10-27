@@ -1,0 +1,105 @@
+# OpTTA on LeWM. Defaults, then task / arm / cell presets; command-line overrides are strict.
+# plan.* is in model steps (1 model step = action_block env steps); eval.* is in env steps.
+
+task: pusht          # pusht | tworoom | reacher
+arm: null            # frozen | adajepa | optta
+cell: null
+seed: 42
+device: cuda
+run_name: null       # default: [<task>_]<corruption><level>_<arm>[_enc]_s<seed><tag> (clean when no corruption)
+tag: ""
+results_root: ${oc.env:OPTTA_ROOT}/results
+
+data:
+  dataset_name: pusht_expert_train
+  keys_to_cache: [action, proprio, state]
+  img_size: 224
+
+world:
+  env_name: swm/PushT-v1
+  image_shape: [224, 224]
+  env_kwargs: {}
+
+model:
+  name: pusht/lewm           # $STABLEWM_HOME/checkpoints/pusht/lewm
+
+eval:
+  num_eval: 50
+  goal_offset_steps: 25      # 5 model steps
+  eval_budget: 150           # 30 replans x 5 env steps
+  callables:
+    - method: _set_state
+      args: {state: {value: state}}
+    - method: _set_goal_state
+      args: {goal_state: {value: goal_state}}
+
+plan:
+  horizon: 5                 # 25 env steps
+  receding_horizon: 1        # execute 1 model step per replan
+  action_block: 5            # frameskip
+  warm_start: true           # warm-start from the unexecuted tail of the previous plan
+  objective_base: 2.0
+
+cem:
+  num_samples: 200
+  topk: 30
+  n_steps: 10
+  var_scale: 1.0
+  batch_size: 1
+
+corruption:
+  name: null                 # gamma | hue | contrast | shift | blur | snp | dark | null
+  level: null
+  seed: ${seed}
+  mode: stream               # snp only: fresh noise per frame, reseeded per episode
+  goal_mode: null            # snp goal image only: null = same as mode | episode = one pattern per episode
+
+adapt:
+  enabled: true
+  lr: 5.0e-5                 # LeWM's pretraining lr
+  steps: 1
+  buffer_size: 5             # most recent executed segments
+  finetune_encoder: false    # also adapt the encoder head (projector)
+  encoder_lr: null           # null = adapt.lr
+  optimism:
+    rho: 0.0                 # 0 = AdaJEPA
+    schedule: increasing     # const | increasing (rho sqrt(k/K))
+    schedule_steps: 30       # K = number of replans
+    pool: all                # all | elites
+    elites: 30
+    ratio_eps: 1.0e-12
+
+tasks:
+  # LeWM release checkpoints with their upstream eval configs (le-wm/config/eval/<task>.yaml).
+  pusht: {}
+  tworoom:
+    world: {env_name: swm/TwoRoom-v1, env_kwargs: {}}
+    model: {name: tworoom/lewm}
+    data: {dataset_name: tworoom, keys_to_cache: [action, proprio]}
+    eval:
+      callables:
+        - method: _set_state
+          args: {state: {value: proprio}}
+        - method: _set_goal_state
+          args: {goal_state: {value: goal_proprio}}
+  reacher:
+    world: {env_name: swm/ReacherDMControl-v0, env_kwargs: {task: qpos_match}}
+    model: {name: reacher/lewm}
+    data: {dataset_name: dmc/reacher_random, keys_to_cache: [action]}
+    eval:
+      callables:
+        - method: set_state
+          args: {qpos: {value: qpos}, qvel: {value: qvel}}
+        - method: set_target_qpos
+          args: {target_qpos: {value: goal_qpos}}
+
+arms:
+  frozen:                    # frozen weights; logs the held-out 1-step loss
+    adapt: {enabled: true, steps: 0, optimism: {rho: 0.0}}
+  adajepa:
+    adapt: {enabled: true, optimism: {rho: 0.0}}
+  optta:
+    adapt: {enabled: true, optimism: {rho: 1.0}}
+
+cells:
+  clean:      {corruption: {name: null, level: null}}

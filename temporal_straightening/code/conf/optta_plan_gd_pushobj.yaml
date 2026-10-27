@@ -1,0 +1,74 @@
+defaults:
+  - _self_
+  - override hydra/launcher: submitit_slurm
+
+hydra:
+  run:
+    dir: eval_outputs/${replace_slash:${model_name}}/gd_opttalr${planner.adapt.lr}_steps${planner.adapt.steps}_seed${seed}
+  sweep:
+    dir: eval_outputs/${replace_slash:${model_name}}/gd_opttalr${planner.adapt.lr}_steps${planner.adapt.steps}_seed${seed}
+    subdir: ${hydra.job.num}
+  launcher:
+    submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+    nodes: 1
+    tasks_per_node: 1
+    cpus_per_task: 16
+    mem_gb: 64
+    gres: "gpu:1"
+    qos: "normal"
+    timeout_min: 720
+
+ckpt_base_path: ./checkpoints # released model dir (contains hydra.yaml + checkpoints/)
+model_name: null
+model_epoch: latest
+
+seed: 100
+n_evals: 50
+goal_source: 'segments'       # targets from eval_data_path (plan_targets.pkl)
+eval_data_path: null          # e.g. <release>/data/pushobj_eval/val_T/plan_targets.pkl
+ood_corruption: null          # null | 'blur' | 'snp1' | 'snp5' | 'dark'
+ood_level: null               # optional corruption level override
+env_kwargs_override: null     # e.g. {agent_color: Red} / {color: Red} / {goal_color: Red}
+goal_H: 25
+n_plot_samples: 10
+decode_for_viz: false
+num_start_frames: 1
+
+debug_dset_init: False
+
+objective:
+  _target_: planning.objectives.create_objective_fn
+  alpha: 1
+  base: 2
+  mode: staged
+
+planner:
+  _target_: planning.optta_mpc.OpTTAMPCPlanner
+  max_iter: 20
+  n_taken_actions: 5
+
+  # --- Test-time adaptation (frozen baseline: adapt.lr=0 adapt.steps=0) ---
+  adapt:
+    lr: 5e-4
+    steps: 1
+    optimizer: adam
+    finetune_every: 1              # adapt every N MPC iterations
+    replay_buffer: recent5         # false | 'recent<N>' | 'hard<N>'
+    finetune_encoder: true         # adapt the encoder head too
+    encoder_lr: 1e-5               # separate encoder LR (defaults to lr if null)
+    last_layer_only: true          # predictor's last transformer layer only
+    encoder_last_layer_only: true  # encoder's last submodule only
+    # OpTTA optimism rho (planning/optta.py); 0 = AdaJEPA.
+    optimism_ratio_target: 0.0
+  reuse_actions: true              # warm-start from unexecuted actions of previous replan
+
+  sub_planner:
+    target: planning.gd.GDPlanner
+    lr: 0.1
+    sample_type: zero
+    action_noise: 0
+    horizon: 25
+    var_scale: 1
+    opt_steps: 100
+    eval_every: -1
+  name: optta_plan_gd_pushobj

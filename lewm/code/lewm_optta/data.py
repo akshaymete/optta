@@ -56,11 +56,12 @@ def sample_episodes(dataset, num_eval: int, goal_offset: int, seed: int):
     max_start_per_row = lengths[episode_idx] - goal_offset - 1
     valid_indices = np.nonzero(step_idx <= max_start_per_row)[0]
 
+    if len(valid_indices) - 1 < num_eval:
+        raise ValueError("Not enough episodes with sufficient length for evaluation.")
+
     g = np.random.default_rng(seed)
     pick = g.choice(len(valid_indices) - 1, size=num_eval, replace=False)
     rows = np.sort(valid_indices[pick])
-    if len(rows) < num_eval:
-        raise ValueError("Not enough episodes with sufficient length for evaluation.")
 
     data = dataset.get_row_data(rows)
     episodes = [int(x) for x in np.asarray(data[col]).ravel()]
